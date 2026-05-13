@@ -1,0 +1,27 @@
+name = "registrai-agents"
+main = "src/worker.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cron triggers. Add one per agent. The dispatch in src/worker.ts maps each
+# cron expression to its agent.
+[triggers]
+crons = [
+  "0 14 * * *",   # warsaw-resi attestation, daily 14:00 UTC
+  "0 */6 * * *",  # market proposer (LLM), every 6 hours
+]
+
+[[kv_namespaces]]
+binding = "PROPOSALS"
+id = "f084e51e62ed4ca9947ec5ef508da6cd"
+
+# Public (non-secret) bindings — contract addresses, feed ids, methodology CIDs.
+# Secrets (PRIVATE_KEY, RPC_URL, NBP_REPORT_URL) are set via:
+#   wrangler secret put PRIVATE_KEY
+[vars]
+REGISTRY_ADDRESS = "0xa7db7FA00193baC5315335899b008A013FAFf384"
+ATTESTATION_ADDRESS = "0x9F1B338326cfb4389e70AEb5685ed5491E60aBE5"
+WARSAW_FEED_ID = "0x264ba3f6ecc15c546f3d12c5ca428cd85eec37cd3d54747df2dba99a9263caff"
+WARSAW_AGENT_ADDRESS = "0x84C799941C6B69AbB296EC46a02E4e0772Ad2E5e"
+WARSAW_METHODOLOGY_CID = "ipfs://warsaw-resi-v1-placeholder"
+WARSAW_OTODOM_URL = "https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/mazowieckie/warszawa/warszawa/warszawa"
