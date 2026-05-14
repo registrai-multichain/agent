@@ -12,6 +12,8 @@
  */
 import { createPublicClient, defineChain, http, type Hex } from "viem";
 import { buildWarsawAgent } from "./agents/warsaw.js";
+import { buildPolishCpiAgent } from "./agents/polish-cpi.js";
+import { buildEcbRateAgent } from "./agents/ecb-rate.js";
 import { generateProposals, type ProposalSet } from "./agents/proposer.js";
 import { attestationAbi, log } from "./sdk/index.js";
 
@@ -20,15 +22,25 @@ export interface Env {
   PRIVATE_KEY: string;
   RPC_URL: string;
   NBP_REPORT_URL: string;
+  GUS_REPORT_URL: string;
+  ECB_REPORT_URL: string;
   ANTHROPIC_API_KEY?: string;
 
-  // Public config (per agent)
+  // Public config — Warsaw
   REGISTRY_ADDRESS: string;
   ATTESTATION_ADDRESS: string;
   WARSAW_FEED_ID: string;
   WARSAW_AGENT_ADDRESS: string;
   WARSAW_METHODOLOGY_CID: string;
   WARSAW_OTODOM_URL?: string;
+
+  // Public config — Polish CPI
+  POLISH_CPI_FEED_ID?: string;
+  POLISH_CPI_METHODOLOGY_CID?: string;
+
+  // Public config — ECB rate
+  ECB_RATE_FEED_ID?: string;
+  ECB_RATE_METHODOLOGY_CID?: string;
 
   // KV store for LLM-proposed markets (read by frontend over fetch).
   PROPOSALS: KVNamespace;
@@ -51,7 +63,13 @@ export default {
     log.info("worker: scheduled", { cron: event.cron });
 
     if (event.cron === "0 14 * * *") {
-      await runWarsaw(env);
+      // Daily attestation tick — fan out across every first-party agent.
+      // Each agent is fully isolated; one failing doesn't stop the others.
+      await Promise.allSettled([
+        runWarsaw(env),
+        runPolishCpi(env),
+        runEcbRate(env),
+      ]);
     } else if (event.cron === "0 */6 * * *") {
       await runProposer(env);
     } else {
@@ -155,6 +173,58 @@ async function runWarsaw(env: Env): Promise<void> {
     // Don't rethrow — failures here should not crash the Worker (Cloudflare
     // would retry, possibly triggering double attestations). Log and exit.
     log.error("worker: warsaw failed", { error: (e as Error).message });
+  }
+}
+
+async function runPolishCpi(env: Env): Promise<void> {
+  if (!env.POLISH_CPI_FEED_ID) {
+    log.info("worker: polish-cpi not configured, skipping");
+    return;
+  }
+  const agent = buildPolishCpiAgent({
+    feedId: env.POLISH_CPI_FEED_ID as `0x${string}`,
+    registryAddress: env.REGISTRY_ADDRESS as `0x${string}`,
+    attestationAddress: env.ATTESTATION_ADDRESS as `0x${string}`,
+    methodologyCid: env.POLISH_CPI_METHODOLOGY_CID ?? "ipfs://polish-cpi-v1-placeholder",
+    gusReportUrl: env.GUS_REPORT_URL,
+  });
+  try {
+    const result = await agent.attest({
+      privateKey: env.PRIVATE_KEY as `0x${string}`,
+      rpcUrl: env.RPC_URL,
+    });
+    log.info("worker: polish-cpi attested", {
+      txHash: result.txHash,
+      value: result.value.toString(),
+    });
+  } catch (e) {
+    log.error("worker: polish-cpi failed", { error: (e as Error).message });
+  }
+}
+
+async function runEcbRate(env: Env): Promise<void> {
+  if (!env.ECB_RATE_FEED_ID) {
+    log.info("worker: ecb-rate not configured, skipping");
+    return;
+  }
+  const agent = buildEcbRateAgent({
+    feedId: env.ECB_RATE_FEED_ID as `0x${string}`,
+    registryAddress: env.REGISTRY_ADDRESS as `0x${string}`,
+    attestationAddress: env.ATTESTATION_ADDRESS as `0x${string}`,
+    methodologyCid: env.ECB_RATE_METHODOLOGY_CID ?? "ipfs://ecb-rate-v1-placeholder",
+    ecbReportUrl: env.ECB_REPORT_URL,
+  });
+  try {
+    const result = await agent.attest({
+      privateKey: env.PRIVATE_KEY as `0x${string}`,
+      rpcUrl: env.RPC_URL,
+    });
+    log.info("worker: ecb-rate attested", {
+      txHash: result.txHash,
+      value: result.value.toString(),
+    });
+  } catch (e) {
+    log.error("worker: ecb-rate failed", { error: (e as Error).message });
   }
 }
 

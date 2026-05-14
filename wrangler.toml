@@ -25,3 +25,11 @@ WARSAW_FEED_ID = "0xf4968db834c4e03f9c2e10bb883fe74f84c850cfacac058a1b520a8d8fa3
 WARSAW_AGENT_ADDRESS = "0x84C799941C6B69AbB296EC46a02E4e0772Ad2E5e"
 WARSAW_METHODOLOGY_CID = "ipfs://warsaw-resi-v1-placeholder"
 WARSAW_OTODOM_URL = "https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/mazowieckie/warszawa/warszawa/warszawa"
+
+# Polish CPI agent
+POLISH_CPI_FEED_ID = "0x82f8fdde492becda94f8fa721adf86a7b843786875889b428197afb17a4e84f4"
+POLISH_CPI_METHODOLOGY_CID = "ipfs://polish-cpi-v1-placeholder"
+
+# ECB main refi rate agent
+ECB_RATE_FEED_ID = "0xf2cc4c84c9ee4b2caeb72c77b9c9d4576da152ab8ccdbc02dedc0e611d3cf0bd"
+ECB_RATE_METHODOLOGY_CID = "ipfs://ecb-rate-v1-placeholder"
