@@ -157,7 +157,8 @@ export async function runMarketMaker(env: MmEnv): Promise<void> {
     return { ...market, id: m.id as Hex, threshold: m.threshold, comparator: m.comparator };
   }));
 
-  const openMarkets = snapshots.filter((s) => s.phase === 1);
+  // Phase enum on Markets: { Trading=0, Resolved=1 }
+  const openMarkets = snapshots.filter((s) => s.phase === 0);
   if (openMarkets.length === 0) {
     log.info("mm: no open markets");
     return;
