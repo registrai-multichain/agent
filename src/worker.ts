@@ -15,6 +15,7 @@ import { buildWarsawAgent } from "./agents/warsaw.js";
 import { buildPolishCpiAgent } from "./agents/polish-cpi.js";
 import { buildEcbRateAgent } from "./agents/ecb-rate.js";
 import { generateProposals, type ProposalSet } from "./agents/proposer.js";
+import { runMarketMaker } from "./bots/mm.js";
 import { attestationAbi, log } from "@registrai/agent-sdk";
 
 export interface Env {
@@ -25,6 +26,7 @@ export interface Env {
   GUS_REPORT_URL: string;
   ECB_REPORT_URL: string;
   ANTHROPIC_API_KEY?: string;
+  TRADER_PRIVATE_KEY?: string;
 
   // Public config — Warsaw
   REGISTRY_ADDRESS: string;
@@ -72,6 +74,8 @@ export default {
       ]);
     } else if (event.cron === "0 */6 * * *") {
       await runProposer(env);
+    } else if (event.cron === "*/15 * * * *") {
+      await runMarketMaker({ TRADER_PRIVATE_KEY: env.TRADER_PRIVATE_KEY, RPC_URL: env.RPC_URL });
     } else {
       log.warn("worker: unknown cron, ignoring", { cron: event.cron });
     }

@@ -13,6 +13,7 @@
     "dry-run": "tsx src/index.ts --dry-run",
     "once": "tsx src/index.ts --once",
     "bot:trade": "tsx src/bots/trader.ts",
+    "bot:mm": "tsx src/bots/mm.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
