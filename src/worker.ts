@@ -15,7 +15,7 @@ import { buildWarsawAgent } from "./agents/warsaw.js";
 import { buildPolishCpiAgent } from "./agents/polish-cpi.js";
 import { buildEcbRateAgent } from "./agents/ecb-rate.js";
 import { generateProposals, type ProposalSet } from "./agents/proposer.js";
-import { attestationAbi, log } from "./sdk/index.js";
+import { attestationAbi, log } from "@registrai/agent-sdk";
 
 export interface Env {
   // Secrets

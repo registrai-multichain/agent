@@ -4,7 +4,7 @@
  * /methodology/ecb-rate-v1.md.
  */
 import type { Address, Hex } from "viem";
-import { defineAgent, hashRecords } from "../sdk/index.js";
+import { defineAgent, hashRecords } from "@registrai/agent-sdk";
 import { fetchEcbRate, type EcbRateReading } from "../sources/ecb.js";
 
 export interface EcbRateAgentEnv {

@@ -6,7 +6,7 @@
 import { config as loadEnv } from "dotenv";
 import { type Address, type Hex, isAddress, isHex } from "viem";
 import { buildWarsawAgent } from "./agents/warsaw.js";
-import { log } from "./sdk/index.js";
+import { log } from "@registrai/agent-sdk";
 
 loadEnv();
 

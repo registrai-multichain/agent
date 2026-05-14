@@ -1,4 +1,4 @@
-import { fetchJson, log } from "../sdk/index.js";
+import { fetchJson, log } from "@registrai/agent-sdk";
 
 export interface GusCpiReading {
   /** Reference period the value covers (e.g., "2026-04" for April 2026). */

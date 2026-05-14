@@ -11,7 +11,7 @@ import {
   hashRecords,
   median,
   trimByPercentile,
-} from "../sdk/index.js";
+} from "@registrai/agent-sdk";
 import { fetchOtodom, type Listing } from "../sources/otodom.js";
 import { fetchNbpAnchor, type NbpAnchor } from "../sources/nbp.js";
 

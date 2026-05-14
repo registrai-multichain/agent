@@ -4,7 +4,7 @@
  * at /methodology/polish-cpi-v1.md.
  */
 import type { Address, Hex } from "viem";
-import { defineAgent, hashRecords } from "../sdk/index.js";
+import { defineAgent, hashRecords } from "@registrai/agent-sdk";
 import { fetchPolishCpi, type GusCpiReading } from "../sources/gus.js";
 
 export interface PolishCpiAgentEnv {

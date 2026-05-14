@@ -25,7 +25,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { config as loadEnv } from "dotenv";
-import { log } from "../sdk/index.js";
+import { log } from "@registrai/agent-sdk";
 import deployment from "../../../contracts/deployments/arc-testnet.json" with { type: "json" };
 
 loadEnv();
@@ -157,12 +157,7 @@ export async function runOneTrade(): Promise<void> {
   const marketChoices = deployment.markets as Array<{ id: string; threshold: number }>;
   const target = marketChoices[Math.floor(Math.random() * marketChoices.length)]!;
 
-  // Bias toward the side that matches current attestation vs threshold for a
-  // touch of plausibility — but not always, so we generate two-way flow.
-  const flip = Math.random() < 0.4;
-  const latestValue = deployment.warsawFeed.firstAttestation.value;
-  const naturalYes = latestValue > target.threshold; // very rough; comparator-aware logic would be nicer
-  const outcome = flip ? (naturalYes ? 1 : 0) : naturalYes ? 0 : 1;
+  const outcome = Math.random() < 0.5 ? 0 : 1;
 
   log.info("bot: trading", {
     marketId: target.id,

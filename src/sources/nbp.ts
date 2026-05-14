@@ -1,4 +1,4 @@
-import { fetchJson, log } from "../sdk/index.js";
+import { fetchJson, log } from "@registrai/agent-sdk";
 
 export interface NbpAnchor {
   reportPeriod: string;

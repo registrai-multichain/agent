@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hashRecords, median, trimByPercentile } from "../src/sdk/index.js";
+import { hashRecords, median, trimByPercentile } from "@registrai/agent-sdk";
 import { computeWarsawIndex } from "../src/agents/warsaw.js";
 import type { Listing } from "../src/sources/otodom.js";
 

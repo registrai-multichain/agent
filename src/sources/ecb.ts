@@ -1,4 +1,4 @@
-import { fetchJson, log } from "../sdk/index.js";
+import { fetchJson, log } from "@registrai/agent-sdk";
 
 export interface EcbRateReading {
   /** Decision date — when the ECB Governing Council announced this rate. */

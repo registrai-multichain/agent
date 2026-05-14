@@ -11,7 +11,7 @@
  * — the agent doesn't have funds and can't sign for them.
  */
 import { type Hex } from "viem";
-import { log } from "../sdk/index.js";
+import { log } from "@registrai/agent-sdk";
 
 export interface AttestationSnapshot {
   feedSymbol: string;

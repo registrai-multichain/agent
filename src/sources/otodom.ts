@@ -1,5 +1,5 @@
 import { load as loadHtml } from "cheerio";
-import { fetchText, sleep, log } from "../sdk/index.js";
+import { fetchText, sleep, log } from "@registrai/agent-sdk";
 
 export interface Listing {
   id: string;
