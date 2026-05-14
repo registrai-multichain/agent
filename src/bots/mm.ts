@@ -26,23 +26,11 @@ const TRADE_AMOUNT_USDC = 0.3;
 const TRADE_AMOUNT_WEI = parseUnits(String(TRADE_AMOUNT_USDC), 6);
 const SPREAD_TOLERANCE = 0.05; // do nothing if pool is within 5pp of target
 const MIN_BALANCE_USDC_WEI = parseUnits("2", 6);
-const APPROVE_AMOUNT_WEI = parseUnits("50", 6);
 
 type Comparator = "GreaterThan" | "GreaterThanOrEqual" | "LessThan" | "LessThanOrEqual";
 
-const usdcAbi = [
-  { type: "function", name: "balanceOf", stateMutability: "view",
-    inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] },
-  { type: "function", name: "allowance", stateMutability: "view",
-    inputs: [{ name: "o", type: "address" }, { name: "s", type: "address" }],
-    outputs: [{ type: "uint256" }] },
-  { type: "function", name: "approve", stateMutability: "nonpayable",
-    inputs: [{ name: "s", type: "address" }, { name: "a", type: "uint256" }],
-    outputs: [{ type: "bool" }] },
-] as const;
-
-const marketsAbi = [
-  { type: "function", name: "buy", stateMutability: "nonpayable",
+const vaultAbi = [
+  { type: "function", name: "executeBuy", stateMutability: "nonpayable",
     inputs: [
       { name: "marketId", type: "bytes32" },
       { name: "outcome", type: "uint8" },
@@ -50,6 +38,11 @@ const marketsAbi = [
       { name: "minSharesOut", type: "uint256" },
     ],
     outputs: [{ type: "uint256" }] },
+  { type: "function", name: "nav", stateMutability: "view",
+    inputs: [], outputs: [{ type: "uint256" }] },
+] as const;
+
+const marketsAbi = [
   { type: "function", name: "getMarket", stateMutability: "view",
     inputs: [{ name: "marketId", type: "bytes32" }],
     outputs: [{
@@ -134,30 +127,22 @@ export async function runMarketMaker(env: MmEnv): Promise<void> {
   const publicClient = createPublicClient({ chain: arc, transport: http(env.RPC_URL) });
   const walletClient = createWalletClient({ chain: arc, transport: http(env.RPC_URL), account });
 
-  const usdc = deployment.contracts.USDC as Address;
   const marketsAddr = deployment.contracts.Markets as Address;
   const attestation = deployment.contracts.Attestation as Address;
-
-  const balance = (await publicClient.readContract({
-    address: usdc, abi: usdcAbi, functionName: "balanceOf", args: [account.address],
-  })) as bigint;
-  log.info("mm: balance", { usdc: (Number(balance) / 1e6).toFixed(4) });
-  if (balance < MIN_BALANCE_USDC_WEI) {
-    log.warn("mm: balance below floor, top up via faucet");
+  const vaultAddr = (deployment.contracts as { MarketMakerVault?: string })
+    .MarketMakerVault as Address | undefined;
+  if (!vaultAddr) {
+    log.warn("mm: MarketMakerVault not configured in deployment manifest, skipping");
     return;
   }
 
-  const allowance = (await publicClient.readContract({
-    address: usdc, abi: usdcAbi, functionName: "allowance",
-    args: [account.address, marketsAddr],
+  const vaultNav = (await publicClient.readContract({
+    address: vaultAddr, abi: vaultAbi, functionName: "nav",
   })) as bigint;
-  if (allowance < TRADE_AMOUNT_WEI) {
-    log.info("mm: approving USDC");
-    const h = await walletClient.writeContract({
-      address: usdc, abi: usdcAbi, functionName: "approve",
-      args: [marketsAddr, APPROVE_AMOUNT_WEI],
-    });
-    await publicClient.waitForTransactionReceipt({ hash: h });
+  log.info("mm: vault nav", { usdc: (Number(vaultNav) / 1e6).toFixed(4) });
+  if (vaultNav < MIN_BALANCE_USDC_WEI) {
+    log.warn("mm: vault NAV below floor, top up via deposit");
+    return;
   }
 
   // Filter to USDC markets only (we only have USDC on this bot wallet).
@@ -222,7 +207,7 @@ export async function runMarketMaker(env: MmEnv): Promise<void> {
   });
 
   const hash = await walletClient.writeContract({
-    address: marketsAddr, abi: marketsAbi, functionName: "buy",
+    address: vaultAddr, abi: vaultAbi, functionName: "executeBuy",
     args: [target.id, outcome, TRADE_AMOUNT_WEI, minShares],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
