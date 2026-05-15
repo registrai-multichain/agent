@@ -25,7 +25,8 @@ loadEnv({ path: ".env.bot", override: true });
 const DISPUTE_WINDOW_SEC = 3600;
 const MARKET_EXPIRY_OFFSET_SEC = 60;
 const MIN_BOND = parseUnits("10", 6);
-const SEED_LIQUIDITY = parseUnits("2", 6);
+// Markets enforces MIN_LIQUIDITY = 5 USDC at createMarket.
+const SEED_LIQUIDITY = parseUnits("5", 6);
 const BUY_AMOUNT = parseUnits("0.5", 6);
 
 const registryAbi = [
