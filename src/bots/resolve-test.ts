@@ -179,7 +179,13 @@ async function main() {
     args: [feedId, account.address, 17000n, 0, expiry, SEED_LIQUIDITY],
   });
   const mkRcpt = await wait(mkHash);
-  const marketId = mkRcpt.logs[0]!.topics[1]! as Hex;
+  // MarketCreated(bytes32 indexed marketId, address indexed creator, bytes32 indexed feedId, ...)
+  // — pick the log emitted by Markets (not the USDC Transfer log).
+  const marketLog = mkRcpt.logs.find(
+    (l) => l.address.toLowerCase() === marketsAddr.toLowerCase(),
+  );
+  if (!marketLog) throw new Error("MarketCreated log not found");
+  const marketId = marketLog.topics[1]! as Hex;
   log.info("resolve-test: marketId", { marketId });
 
   // 5. Vault buys YES.
