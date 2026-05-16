@@ -27,7 +27,14 @@ const TRADE_AMOUNT_WEI = parseUnits(String(TRADE_AMOUNT_USDC), 6);
 const SPREAD_TOLERANCE = 0.05; // do nothing if pool is within 5pp of target
 const MIN_BALANCE_USDC_WEI = parseUnits("2", 6);
 
-type Comparator = "GreaterThan" | "GreaterThanOrEqual" | "LessThan" | "LessThanOrEqual";
+// Markets.Comparator enum: 0=GreaterThan, 1=GreaterOrEqual, 2=LessThan, 3=LessOrEqual
+type ComparatorN = 0 | 1 | 2 | 3;
+
+// Arc public RPC caps single-query log ranges at 100k blocks. We scan
+// the last ~10 days in chunks of CHUNK_BLOCKS each, going backward from
+// head until we cover LOG_LOOKBACK_BLOCKS or reach genesis.
+const LOG_LOOKBACK_BLOCKS = 600_000n; // ~10 days at ~1.5s/block
+const CHUNK_BLOCKS = 100_000n;
 
 const vaultAbi = [
   { type: "function", name: "executeBuy", stateMutability: "nonpayable",
@@ -61,6 +68,17 @@ const marketsAbi = [
         { name: "createdAt", type: "uint256" },
       ],
     }] },
+  { type: "event", name: "MarketCreated", anonymous: false,
+    inputs: [
+      { name: "marketId", type: "bytes32", indexed: true },
+      { name: "creator", type: "address", indexed: true },
+      { name: "feedId", type: "bytes32", indexed: true },
+      { name: "agent", type: "address", indexed: false },
+      { name: "threshold", type: "int256", indexed: false },
+      { name: "comparator", type: "uint8", indexed: false },
+      { name: "expiry", type: "uint256", indexed: false },
+      { name: "liquidity", type: "uint256", indexed: false },
+    ] },
 ] as const;
 
 export interface MmEnv {
@@ -71,16 +89,24 @@ export interface MmEnv {
 interface OnchainMarket {
   feedId: Hex;
   agent: Address;
+  threshold: bigint;
+  comparator: number;
   yesReserve: bigint;
   noReserve: bigint;
   expiry: bigint;
   phase: number;
 }
 
-interface MarketSnapshot extends OnchainMarket {
+interface MarketSnapshot {
   id: Hex;
+  feedId: Hex;
+  agent: Address;
   threshold: number;
-  comparator: Comparator;
+  comparator: ComparatorN;
+  yesReserve: bigint;
+  noReserve: bigint;
+  expiry: bigint;
+  phase: number;
 }
 
 interface Scored extends MarketSnapshot {
@@ -93,10 +119,11 @@ interface Scored extends MarketSnapshot {
 function targetYesProb(
   value: number,
   threshold: number,
-  comparator: Comparator,
+  comparator: ComparatorN,
   daysToExpiry: number,
 ): number {
-  const isGreater = comparator.startsWith("Greater");
+  // 0/1 are Greater variants, 2/3 are Less variants.
+  const isGreater = comparator < 2;
   const yesWinning = isGreater ? value > threshold : value < threshold;
   const relDistance = Math.abs(value - threshold) / Math.max(1, Math.abs(threshold));
   const timeFactor = 1 / (1 + Math.max(0, daysToExpiry) / 30);
@@ -145,20 +172,56 @@ export async function runMarketMaker(env: MmEnv): Promise<void> {
     return;
   }
 
-  // Filter to USDC markets only (we only have USDC on this bot wallet).
-  const usdcMarkets = (deployment.markets as Array<{
-    id: string; collateral: string; threshold: number; comparator: Comparator;
-  }>).filter((m) => m.collateral === "USDC");
+  // Discover markets from MarketCreated events on the USDC Markets
+  // contract. EURC lives on a different address so it's naturally
+  // excluded. User-created markets join the rotation the next tick.
+  // Scan in 100k-block chunks because the Arc RPC caps per-query range.
+  const latestBlock = await publicClient.getBlockNumber();
+  const lookback = latestBlock > LOG_LOOKBACK_BLOCKS ? LOG_LOOKBACK_BLOCKS : latestBlock;
+  const earliest = latestBlock - lookback;
+  const discovered = new Set<Hex>();
+  for (let to = latestBlock; to > earliest; ) {
+    const from = to - CHUNK_BLOCKS > earliest ? to - CHUNK_BLOCKS : earliest;
+    const chunk = await publicClient.getContractEvents({
+      address: marketsAddr,
+      abi: marketsAbi,
+      eventName: "MarketCreated",
+      fromBlock: from,
+      toBlock: to,
+    });
+    for (const e of chunk) {
+      if (e.args.marketId) discovered.add(e.args.marketId);
+    }
+    if (from === earliest) break;
+    to = from - 1n;
+  }
+  const marketIds = [...discovered];
+  log.info("mm: discovered markets", { count: marketIds.length });
 
-  const snapshots: MarketSnapshot[] = await Promise.all(usdcMarkets.map(async (m) => {
-    const market = (await publicClient.readContract({
-      address: marketsAddr, abi: marketsAbi, functionName: "getMarket", args: [m.id as Hex],
+  const snapshots: MarketSnapshot[] = await Promise.all(marketIds.map(async (id) => {
+    const m = (await publicClient.readContract({
+      address: marketsAddr, abi: marketsAbi, functionName: "getMarket", args: [id],
     })) as OnchainMarket;
-    return { ...market, id: m.id as Hex, threshold: m.threshold, comparator: m.comparator };
+    return {
+      id,
+      feedId: m.feedId,
+      agent: m.agent,
+      threshold: Number(m.threshold),
+      comparator: m.comparator as ComparatorN,
+      yesReserve: m.yesReserve,
+      noReserve: m.noReserve,
+      expiry: m.expiry,
+      phase: m.phase,
+    };
   }));
 
-  // Phase enum on Markets: { Trading=0, Resolved=1 }
-  const openMarkets = snapshots.filter((s) => s.phase === 0);
+  // Phase=0 is Trading, but a market in Trading can still be past its
+  // expiry (just waiting for someone to call resolve). Buys revert with
+  // MarketExpired() in that window — filter them out here.
+  const nowSecCheck = BigInt(Math.floor(Date.now() / 1000));
+  const openMarkets = snapshots.filter(
+    (s) => s.phase === 0 && s.expiry > nowSecCheck,
+  );
   if (openMarkets.length === 0) {
     log.info("mm: no open markets");
     return;
