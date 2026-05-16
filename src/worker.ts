@@ -12,6 +12,7 @@
  */
 import { createPublicClient, defineChain, http, type Hex } from "viem";
 import { buildWarsawAgent } from "./agents/warsaw.js";
+import { buildWarsawVerifiableAgent } from "./agents/warsaw-verifiable.js";
 import { buildPolishCpiAgent } from "./agents/polish-cpi.js";
 import { buildEcbRateAgent } from "./agents/ecb-rate.js";
 import { generateProposals, type ProposalSet } from "./agents/proposer.js";
@@ -35,6 +36,13 @@ export interface Env {
   WARSAW_AGENT_ADDRESS: string;
   WARSAW_METHODOLOGY_CID: string;
   WARSAW_OTODOM_URL?: string;
+
+  // Public config — Warsaw verifiable (v1.1 Registry + Attestation, rule-bound)
+  WARSAW_VERIFIABLE_FEED_ID?: string;
+  WARSAW_VERIFIABLE_METHODOLOGY_CID?: string;
+  REGISTRY_V1_1?: string;
+  ATTESTATION_V1_1?: string;
+  MEDIAN_RULE?: string;
 
   // Public config — Polish CPI
   POLISH_CPI_FEED_ID?: string;
@@ -69,6 +77,7 @@ export default {
       // Each agent is fully isolated; one failing doesn't stop the others.
       await Promise.allSettled([
         runWarsaw(env),
+        runWarsawVerifiable(env),
         runPolishCpi(env),
         runEcbRate(env),
       ]);
@@ -171,12 +180,39 @@ async function runWarsaw(env: Env): Promise<void> {
     });
     log.info("worker: warsaw attested", {
       txHash: result.txHash,
-      value: result.value.toString(),
+      value: result.value?.toString(),
     });
   } catch (e) {
     // Don't rethrow — failures here should not crash the Worker (Cloudflare
     // would retry, possibly triggering double attestations). Log and exit.
     log.error("worker: warsaw failed", { error: (e as Error).message });
+  }
+}
+
+async function runWarsawVerifiable(env: Env): Promise<void> {
+  if (!env.WARSAW_VERIFIABLE_FEED_ID || !env.REGISTRY_V1_1 || !env.ATTESTATION_V1_1 || !env.MEDIAN_RULE) {
+    log.info("worker: warsaw-verifiable not configured, skipping");
+    return;
+  }
+  const agent = buildWarsawVerifiableAgent({
+    feedId: env.WARSAW_VERIFIABLE_FEED_ID as `0x${string}`,
+    registryAddress: env.REGISTRY_V1_1 as `0x${string}`,
+    attestationAddress: env.ATTESTATION_V1_1 as `0x${string}`,
+    methodologyCid: env.WARSAW_VERIFIABLE_METHODOLOGY_CID ?? "ipfs://warsaw-resi-median-v1",
+    ruleAddress: env.MEDIAN_RULE as `0x${string}`,
+    otodomUrl: env.WARSAW_OTODOM_URL ?? DEFAULT_OTODOM_URL,
+  });
+  try {
+    const result = await agent.attest({
+      privateKey: env.PRIVATE_KEY as `0x${string}`,
+      rpcUrl: env.RPC_URL,
+    });
+    log.info("worker: warsaw-verifiable attested", {
+      txHash: result.txHash,
+      n: result.rawInputs?.length,
+    });
+  } catch (e) {
+    log.error("worker: warsaw-verifiable failed", { error: (e as Error).message });
   }
 }
 
@@ -199,7 +235,7 @@ async function runPolishCpi(env: Env): Promise<void> {
     });
     log.info("worker: polish-cpi attested", {
       txHash: result.txHash,
-      value: result.value.toString(),
+      value: result.value?.toString(),
     });
   } catch (e) {
     log.error("worker: polish-cpi failed", { error: (e as Error).message });
@@ -225,7 +261,7 @@ async function runEcbRate(env: Env): Promise<void> {
     });
     log.info("worker: ecb-rate attested", {
       txHash: result.txHash,
-      value: result.value.toString(),
+      value: result.value?.toString(),
     });
   } catch (e) {
     log.error("worker: ecb-rate failed", { error: (e as Error).message });
