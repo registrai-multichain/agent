@@ -16,12 +16,19 @@ crons = [
 binding = "PROPOSALS"
 id = "f084e51e62ed4ca9947ec5ef508da6cd"
 
+[[kv_namespaces]]
+binding = "MARKET_DESCRIPTIONS"
+# Set this via `wrangler kv namespace create MARKET_DESCRIPTIONS` and paste the id below.
+id = "10515ad1c7f0439aa2e772839cd094f0"
+
 # Public (non-secret) bindings — contract addresses, feed ids, methodology CIDs.
 # Secrets (PRIVATE_KEY, RPC_URL, NBP_REPORT_URL) are set via:
 #   wrangler secret put PRIVATE_KEY
 [vars]
 REGISTRY_ADDRESS = "0xA8E6f5aC6410231Db1422f3B17987Cf657807224"
 ATTESTATION_ADDRESS = "0x04227E2e53041165CB38D5C0aFadCC95096ae5f4"
+MARKETS_ADDR = "0xcaB9aB405F89AC701c3CAcCF110bF94f3A10cD86"
+MARKETS_V1_1_ADDR = "0xec70ce17aa4b0da6898ced47621655c4c31b1136"
 WARSAW_FEED_ID = "0xf4968db834c4e03f9c2e10bb883fe74f84c850cfacac058a1b520a8d8fa37c0b"
 WARSAW_AGENT_ADDRESS = "0x84C799941C6B69AbB296EC46a02E4e0772Ad2E5e"
 WARSAW_METHODOLOGY_CID = "ipfs://warsaw-resi-v1-placeholder"

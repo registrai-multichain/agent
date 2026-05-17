@@ -10,7 +10,13 @@
  * Public bindings (in wrangler.toml [vars]): contract addresses, feed ids,
  * methodology CIDs.
  */
-import { createPublicClient, defineChain, http, type Hex } from "viem";
+import {
+  createPublicClient,
+  defineChain,
+  http,
+  recoverMessageAddress,
+  type Hex,
+} from "viem";
 import { buildWarsawAgent } from "./agents/warsaw.js";
 import { buildWarsawVerifiableAgent } from "./agents/warsaw-verifiable.js";
 import { buildPolishCpiAgent } from "./agents/polish-cpi.js";
@@ -54,6 +60,13 @@ export interface Env {
 
   // KV store for LLM-proposed markets (read by frontend over fetch).
   PROPOSALS: KVNamespace;
+  /** Creator-supplied market descriptions, keyed by marketId. Signature-gated. */
+  MARKET_DESCRIPTIONS: KVNamespace;
+
+  // For description-write signature verification: both Markets v1.0 + v1.1
+  // are accepted (the worker tries each in turn).
+  MARKETS_ADDR?: string;
+  MARKETS_V1_1_ADDR?: string;
 }
 
 interface KVNamespace {
@@ -97,24 +110,146 @@ export default {
    */
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const cors = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "content-type",
+      "Content-Type": "application/json",
+    };
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: cors });
+    }
+
     if (url.pathname === "/proposals") {
       const feedId = url.searchParams.get("feedId") ?? env.WARSAW_FEED_ID;
       const raw = await env.PROPOSALS.get(`proposals:${feedId}`);
-      const cors = {
-        "Access-Control-Allow-Origin": "*",
-        "Content-Type": "application/json",
-      };
       if (!raw) {
         return new Response(JSON.stringify({ proposals: [] }), { status: 200, headers: cors });
       }
       return new Response(raw, { status: 200, headers: cors });
     }
-    return new Response("Registrai agents worker. /proposals?feedId=…", {
+
+    if (url.pathname === "/market-description") {
+      if (request.method === "GET") {
+        const marketId = url.searchParams.get("marketId");
+        if (!marketId) {
+          return new Response(JSON.stringify({ error: "marketId required" }), {
+            status: 400,
+            headers: cors,
+          });
+        }
+        const raw = await env.MARKET_DESCRIPTIONS.get(`desc:${marketId.toLowerCase()}`);
+        return new Response(raw ?? JSON.stringify({ description: null }), {
+          status: 200,
+          headers: cors,
+        });
+      }
+      if (request.method === "POST") {
+        return await handleDescriptionWrite(request, env, cors);
+      }
+      return new Response("method not allowed", { status: 405, headers: cors });
+    }
+
+    return new Response("Registrai agents worker. /proposals · /market-description", {
       status: 200,
       headers: { "Content-Type": "text/plain" },
     });
   },
 } satisfies ExportedHandler<Env>;
+
+/**
+ * Signature-gated write of a market description. Body shape:
+ *   { marketId: "0x…", description: "…", signature: "0x…" }
+ * Where signature signs the plaintext `registrai-market-description:${marketId}:${description}`.
+ * The recovered address must match the market's creator field on chain.
+ * Tries Markets v1.0 first, falls back to Markets v1.1.
+ */
+async function handleDescriptionWrite(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+): Promise<Response> {
+  type Body = { marketId?: string; description?: string; signature?: string };
+  let body: Body;
+  try {
+    body = (await request.json()) as Body;
+  } catch {
+    return new Response(JSON.stringify({ error: "invalid json" }), { status: 400, headers: cors });
+  }
+  const { marketId, description, signature } = body;
+  if (!marketId || !description || !signature) {
+    return new Response(
+      JSON.stringify({ error: "marketId, description, signature required" }),
+      { status: 400, headers: cors },
+    );
+  }
+  if (description.length > 2000) {
+    return new Response(JSON.stringify({ error: "description too long (max 2000)" }), {
+      status: 400, headers: cors,
+    });
+  }
+
+  const message = `registrai-market-description:${marketId.toLowerCase()}:${description}`;
+  let signer: string;
+  try {
+    signer = await recoverMessageAddress({ message, signature: signature as Hex });
+  } catch {
+    return new Response(JSON.stringify({ error: "bad signature" }), { status: 400, headers: cors });
+  }
+
+  // Look up the market's creator. Try Markets v1.0 then v1.1.
+  const candidates = [env.MARKETS_ADDR, env.MARKETS_V1_1_ADDR].filter(
+    (a): a is string => !!a,
+  );
+  const client = createPublicClient({
+    chain: defineChain({
+      id: 5042002, name: "Arc",
+      nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+      rpcUrls: { default: { http: [env.RPC_URL] } },
+    }),
+    transport: http(env.RPC_URL),
+  });
+  const getMarketAbi = [{
+    type: "function", name: "getMarket", stateMutability: "view",
+    inputs: [{ name: "marketId", type: "bytes32" }],
+    outputs: [{ type: "tuple", components: [
+      { name: "feedId", type: "bytes32" }, { name: "agent", type: "address" },
+      { name: "threshold", type: "int256" }, { name: "comparator", type: "uint8" },
+      { name: "expiry", type: "uint256" }, { name: "creator", type: "address" },
+      { name: "yesReserve", type: "uint256" }, { name: "noReserve", type: "uint256" },
+      { name: "phase", type: "uint8" }, { name: "yesWon", type: "bool" },
+      { name: "createdAt", type: "uint256" },
+    ] }],
+  }] as const;
+
+  let creator: string | undefined;
+  for (const addr of candidates) {
+    try {
+      const m = (await client.readContract({
+        address: addr as Hex, abi: getMarketAbi, functionName: "getMarket",
+        args: [marketId as Hex],
+      })) as { creator: string; createdAt: bigint };
+      if (m.createdAt > 0n) {
+        creator = m.creator;
+        break;
+      }
+    } catch { /* try next */ }
+  }
+  if (!creator) {
+    return new Response(JSON.stringify({ error: "market not found" }), { status: 404, headers: cors });
+  }
+  if (signer.toLowerCase() !== creator.toLowerCase()) {
+    return new Response(JSON.stringify({ error: "signer is not market creator" }), {
+      status: 403, headers: cors,
+    });
+  }
+
+  await env.MARKET_DESCRIPTIONS.put(
+    `desc:${marketId.toLowerCase()}`,
+    JSON.stringify({ description, creator, updatedAt: Math.floor(Date.now() / 1000) }),
+  );
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: cors });
+}
 
 async function runProposer(env: Env): Promise<void> {
   // Read the latest attestation for the Warsaw feed directly from chain.
