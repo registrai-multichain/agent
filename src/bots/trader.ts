@@ -119,7 +119,8 @@ export async function runOneTrade(): Promise<void> {
   const walletClient = createWalletClient({ chain: arc, transport: http(rpcUrl), account });
 
   const usdc = deployment.contracts.USDC as Address;
-  const markets = deployment.contracts.Markets as Address;
+  const marketsV10 = deployment.contracts.Markets as Address;
+  const marketsV11 = (deployment.contracts as { Markets_v1_1?: string }).Markets_v1_1 as Address | undefined;
 
   // Balance check.
   const balance = (await publicClient.readContract({
@@ -135,27 +136,31 @@ export async function runOneTrade(): Promise<void> {
     return;
   }
 
-  // Approve generously once (covers many trades).
-  const allowance = (await publicClient.readContract({
-    address: usdc,
-    abi: usdcAbi,
-    functionName: "allowance",
-    args: [account.address, markets],
-  })) as bigint;
-  if (allowance < TRADE_AMOUNT_WEI) {
-    log.info("bot: approving USDC");
-    const approveHash = await walletClient.writeContract({
+  // Approve both Markets contracts generously once.
+  for (const marketsAddr of [marketsV10, ...(marketsV11 ? [marketsV11] : [])]) {
+    const allowance = (await publicClient.readContract({
       address: usdc,
       abi: usdcAbi,
-      functionName: "approve",
-      args: [markets, parseUnits("10", 6)],
-    });
-    await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      functionName: "allowance",
+      args: [account.address, marketsAddr],
+    })) as bigint;
+    if (allowance < TRADE_AMOUNT_WEI) {
+      log.info("bot: approving USDC", { markets: marketsAddr });
+      const approveHash = await walletClient.writeContract({
+        address: usdc,
+        abi: usdcAbi,
+        functionName: "approve",
+        args: [marketsAddr, parseUnits("100", 6)],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    }
   }
 
-  // Pick a random market and side.
-  const marketChoices = deployment.markets as Array<{ id: string; threshold: number }>;
+  // Pick a random market and side. Route to the correct Markets contract
+  // based on marketsVersion field in the deployment manifest.
+  const marketChoices = deployment.markets as Array<{ id: string; threshold: number; marketsVersion?: string }>;
   const target = marketChoices[Math.floor(Math.random() * marketChoices.length)]!;
+  const markets = (target.marketsVersion === "1.1" && marketsV11) ? marketsV11 : marketsV10;
 
   const outcome = Math.random() < 0.5 ? 0 : 1;
 
@@ -172,7 +177,7 @@ export async function runOneTrade(): Promise<void> {
   // market state has drifted significantly.
   const minShares = TRADE_AMOUNT_WEI / 2n;
   const hash = await walletClient.writeContract({
-    address: markets,
+    address: markets as Address,
     abi: marketsAbi,
     functionName: "buy",
     args: [target.id as Hex, outcome, TRADE_AMOUNT_WEI, minShares],

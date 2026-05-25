@@ -10,6 +10,7 @@ crons = [
   "0 14 * * *",   # warsaw-resi attestation, daily 14:00 UTC
   "0 */6 * * *",  # market proposer (LLM), every 6 hours
   "*/15 * * * *", # market-maker bot, every 15 minutes
+  "*/30 * * * *", # v0.5 CirqueLending: bonded BTC/USD oracle agent + cirBTC integrity monitor
 ]
 
 [[kv_namespaces]]
@@ -20,6 +21,11 @@ id = "f084e51e62ed4ca9947ec5ef508da6cd"
 binding = "MARKET_DESCRIPTIONS"
 # Set this via `wrangler kv namespace create MARKET_DESCRIPTIONS` and paste the id below.
 id = "10515ad1c7f0439aa2e772839cd094f0"
+
+[[kv_namespaces]]
+binding = "SOCIAL_CLAIMS"
+# Stores quest claims (per-wallet) and twitter-handle → wallet bindings.
+id = "66eed5c1acf042c3820c443d712dc56e"
 
 # Public (non-secret) bindings — contract addresses, feed ids, methodology CIDs.
 # Secrets (PRIVATE_KEY, RPC_URL, NBP_REPORT_URL) are set via:
@@ -48,3 +54,14 @@ POLISH_CPI_METHODOLOGY_CID = "ipfs://polish-cpi-v1-placeholder"
 # ECB main refi rate agent
 ECB_RATE_FEED_ID = "0xf2cc4c84c9ee4b2caeb72c77b9c9d4576da152ab8ccdbc02dedc0e611d3cf0bd"
 ECB_RATE_METHODOLOGY_CID = "ipfs://ecb-rate-v1-placeholder"
+
+# v2 protocol stack (registry where the social oracle attests + where new
+# agent registrations land). Used by the share-agent quest to verify the
+# caller has a bonded agent on chain before minting +150 pts.
+REGISTRY_V2 = "0x0529730A961f50997de63ac0aD07f1aEa2dEC0C0"
+
+# Social signal oracle (v2). Bonded agent that mints quest credits.
+# SOCIAL_PRIVATE_KEY is a secret — set via `wrangler secret put SOCIAL_PRIVATE_KEY`.
+REGISTRAI_POINTS_ADDR = "0xF5897349819B16f4431A61Ad61293C1b31bD3381"
+SOCIAL_ORACLE_ADDR = "0xf26db19bc8DC33c9A72399128CF5cfB5dDC76263"
+SOCIAL_FEED_ID = "0xf1151cc45a96996a02da8c9875a2a8a66c3616e60f94cb109b45c5e3a48f0ce6"

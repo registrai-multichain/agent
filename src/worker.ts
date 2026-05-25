@@ -14,7 +14,9 @@ import {
   createPublicClient,
   defineChain,
   http,
+  keccak256,
   recoverMessageAddress,
+  toHex,
   type Hex,
 } from "viem";
 import { buildWarsawAgent } from "./agents/warsaw.js";
@@ -23,6 +25,8 @@ import { buildPolishCpiAgent } from "./agents/polish-cpi.js";
 import { buildEcbRateAgent } from "./agents/ecb-rate.js";
 import { generateProposals, type ProposalSet } from "./agents/proposer.js";
 import { runMarketMaker } from "./bots/mm.js";
+import { handleQuestRequest } from "./social-oracle.js";
+import { runCirqueKeeper } from "./cirque-keeper.js";
 import { attestationAbi, log } from "@registrai/agent-sdk";
 
 export interface Env {
@@ -50,6 +54,19 @@ export interface Env {
   ATTESTATION_V1_1?: string;
   MEDIAN_RULE?: string;
 
+  // v2 protocol stack (where the social oracle and new agents live).
+  REGISTRY_V2?: string;
+
+  // v0.5 CirqueLending — bonded BTC/USD oracle agent + cirBTC integrity
+  // monitor. Optional; cron handler skips the keeper if any of these is
+  // missing.
+  CIRQUE_LENDING_ADDR?: string;
+  KEEPER_PRIVATE_KEY?: string;
+  ATTESTATION_V2?: string;
+  BTC_FEED_ID?: string;
+  CIRBTC_ADDR?: string;
+  CIRBTC_EXPECTED_OWNER?: string;
+
   // Public config — Polish CPI
   POLISH_CPI_FEED_ID?: string;
   POLISH_CPI_METHODOLOGY_CID?: string;
@@ -62,11 +79,18 @@ export interface Env {
   PROPOSALS: KVNamespace;
   /** Creator-supplied market descriptions, keyed by marketId. Signature-gated. */
   MARKET_DESCRIPTIONS: KVNamespace;
+  /** Social-quest claims and twitter-handle bindings. */
+  SOCIAL_CLAIMS: KVNamespace;
 
   // For description-write signature verification: both Markets v1.0 + v1.1
   // are accepted (the worker tries each in turn).
   MARKETS_ADDR?: string;
   MARKETS_V1_1_ADDR?: string;
+
+  // Social signal oracle — bonded agent that mints quest credits.
+  SOCIAL_PRIVATE_KEY?: string;
+  /** v2 RegistraiPoints contract used by the social oracle for awardFlat. */
+  REGISTRAI_POINTS_ADDR?: string;
 }
 
 interface KVNamespace {
@@ -98,6 +122,28 @@ export default {
       await runProposer(env);
     } else if (event.cron === "*/15 * * * *") {
       await runMarketMaker({ TRADER_PRIVATE_KEY: env.TRADER_PRIVATE_KEY, RPC_URL: env.RPC_URL });
+    } else if (event.cron === "*/30 * * * *") {
+      // v0.5 CirqueLending: bonded BTC/USD oracle agent + cirBTC integrity
+      // monitor. Attests every 30 min if all 4 cirBTC integrity probes
+      // pass. Skipped silently if not fully configured.
+      if (
+        env.CIRQUE_LENDING_ADDR &&
+        env.KEEPER_PRIVATE_KEY &&
+        env.ATTESTATION_V2 &&
+        env.BTC_FEED_ID &&
+        env.CIRBTC_ADDR &&
+        env.CIRBTC_EXPECTED_OWNER
+      ) {
+        await runCirqueKeeper({
+          RPC_URL: env.RPC_URL,
+          KEEPER_PRIVATE_KEY: env.KEEPER_PRIVATE_KEY,
+          CIRQUE_LENDING_ADDR: env.CIRQUE_LENDING_ADDR,
+          ATTESTATION_V2: env.ATTESTATION_V2,
+          BTC_FEED_ID: env.BTC_FEED_ID,
+          CIRBTC_ADDR: env.CIRBTC_ADDR,
+          CIRBTC_EXPECTED_OWNER: env.CIRBTC_EXPECTED_OWNER,
+        });
+      }
     } else {
       log.warn("worker: unknown cron, ignoring", { cron: event.cron });
     }
@@ -110,11 +156,16 @@ export default {
    */
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    // Restrict to our own origins. Anything else still works (open CORS for
+    // SDK consumers / cli), but quest endpoints are gated below.
+    const origin = request.headers.get("Origin") ?? "";
+    const allowedOrigin = isAllowedOrigin(origin) ? origin : "https://registrai.cc";
     const cors = {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": allowedOrigin,
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "content-type",
       "Content-Type": "application/json",
+      "Vary": "Origin",
     };
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: cors });
@@ -150,12 +201,61 @@ export default {
       return new Response("method not allowed", { status: 405, headers: cors });
     }
 
-    return new Response("Registrai agents worker. /proposals · /market-description", {
-      status: 200,
-      headers: { "Content-Type": "text/plain" },
-    });
+    // Feed methodology — creator-signed prose explaining the data source +
+    // aggregation rules. Hashed into the feed's onchain identity; the text
+    // itself is stored here so anyone can read it.
+    if (url.pathname === "/feed-methodology") {
+      if (request.method === "GET") {
+        const feedId = url.searchParams.get("feedId");
+        if (!feedId) {
+          return new Response(JSON.stringify({ error: "feedId required" }), {
+            status: 400, headers: cors,
+          });
+        }
+        const raw = await env.MARKET_DESCRIPTIONS.get(
+          `methodology:${feedId.toLowerCase()}`,
+        );
+        return new Response(raw ?? JSON.stringify({ methodology: null }), {
+          status: 200, headers: cors,
+        });
+      }
+      if (request.method === "POST") {
+        return await handleMethodologyWrite(request, env, cors);
+      }
+      return new Response("method not allowed", { status: 405, headers: cors });
+    }
+
+    // Social quest endpoints. The social signal oracle is its own bonded
+    // agent on Arc; these endpoints verify off-chain proofs and mint credits.
+    if (url.pathname.startsWith("/quest/")) {
+      const res = await handleQuestRequest(request, env, cors);
+      if (res) return res;
+    }
+
+    return new Response(
+      "Registrai agents worker. /proposals · /market-description · /feed-methodology · /quest/twitter/{start,verify} · /quest/twitter/share-agent/{start,verify} · /quest/status",
+      { status: 200, headers: { "Content-Type": "text/plain" } },
+    );
   },
 } satisfies ExportedHandler<Env>;
+
+/**
+ * Allow-list for cross-origin requests. Anything else gets a default response
+ * with `Access-Control-Allow-Origin: https://registrai.cc` — which means the
+ * browser will block the request unless the caller is on registrai.cc.
+ * Non-browser clients (cast / curl) work regardless.
+ */
+function isAllowedOrigin(origin: string): boolean {
+  if (!origin) return false;
+  // Production + preview deploys on Cloudflare Pages.
+  if (origin === "https://registrai.cc") return true;
+  if (origin === "https://www.registrai.cc") return true;
+  if (/^https:\/\/[a-z0-9-]+\.registrai-web\.pages\.dev$/.test(origin)) return true;
+  // Local dev.
+  if (/^http:\/\/localhost:\d+$/.test(origin)) return true;
+  if (/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) return true;
+  return false;
+}
 
 /**
  * Signature-gated write of a market description. Body shape:
@@ -247,6 +347,152 @@ async function handleDescriptionWrite(
   await env.MARKET_DESCRIPTIONS.put(
     `desc:${marketId.toLowerCase()}`,
     JSON.stringify({ description, creator, updatedAt: Math.floor(Date.now() / 1000) }),
+  );
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: cors });
+}
+
+/**
+ * Signature-gated write of a feed methodology. Body shape:
+ *   { feedId: "0x…", methodology: "…", signature: "0x…" }
+ * Where signature signs `registrai-feed-methodology:${feedId}:${methodology}`.
+ * The recovered address must match the feed's creator on chain (tries v2,
+ * then v1.1, then v1.0 Registry).
+ *
+ * We ALSO verify keccak256(methodology) === onchain methodologyHash — so the
+ * stored text can never drift from what was hashed at registration time.
+ */
+async function handleMethodologyWrite(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+): Promise<Response> {
+  type Body = { feedId?: string; methodology?: string; signature?: string };
+  let body: Body;
+  try {
+    body = (await request.json()) as Body;
+  } catch {
+    return new Response(JSON.stringify({ error: "invalid json" }), {
+      status: 400, headers: cors,
+    });
+  }
+  const { feedId, methodology, signature } = body;
+  if (!feedId || !methodology || !signature) {
+    return new Response(
+      JSON.stringify({ error: "feedId, methodology, signature required" }),
+      { status: 400, headers: cors },
+    );
+  }
+  if (methodology.length > 8000) {
+    return new Response(
+      JSON.stringify({ error: "methodology too long (max 8000)" }),
+      { status: 400, headers: cors },
+    );
+  }
+
+  const message = `registrai-feed-methodology:${feedId.toLowerCase()}:${methodology}`;
+  let signer: string;
+  try {
+    signer = await recoverMessageAddress({
+      message,
+      signature: signature as Hex,
+    });
+  } catch {
+    return new Response(JSON.stringify({ error: "bad signature" }), {
+      status: 400, headers: cors,
+    });
+  }
+
+  // Look up the feed's creator + methodologyHash. Try v2 → v1.1 → v1.0.
+  const registries = [
+    env.REGISTRY_V2,
+    env.REGISTRY_V1_1,
+    env.REGISTRY_ADDRESS,
+  ].filter((a): a is string => !!a);
+  const client = createPublicClient({
+    chain: defineChain({
+      id: 5042002,
+      name: "Arc",
+      nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+      rpcUrls: { default: { http: [env.RPC_URL] } },
+    }),
+    transport: http(env.RPC_URL),
+  });
+  const getFeedAbi = [
+    {
+      type: "function",
+      name: "getFeed",
+      stateMutability: "view",
+      inputs: [{ name: "feedId", type: "bytes32" }],
+      outputs: [
+        {
+          type: "tuple",
+          components: [
+            { name: "creator", type: "address" },
+            { name: "description", type: "string" },
+            { name: "methodologyHash", type: "bytes32" },
+            { name: "minBond", type: "uint256" },
+            { name: "disputeWindow", type: "uint256" },
+            { name: "resolver", type: "address" },
+            { name: "createdAt", type: "uint256" },
+            { name: "exists", type: "bool" },
+          ],
+        },
+      ],
+    },
+  ] as const;
+
+  let creator: string | undefined;
+  let onchainHash: string | undefined;
+  for (const addr of registries) {
+    try {
+      const f = (await client.readContract({
+        address: addr as Hex,
+        abi: getFeedAbi,
+        functionName: "getFeed",
+        args: [feedId as Hex],
+      })) as { creator: string; methodologyHash: string; exists: boolean };
+      if (f.exists) {
+        creator = f.creator;
+        onchainHash = f.methodologyHash;
+        break;
+      }
+    } catch {
+      /* try next registry */
+    }
+  }
+  if (!creator || !onchainHash) {
+    return new Response(JSON.stringify({ error: "feed not found" }), {
+      status: 404, headers: cors,
+    });
+  }
+  if (signer.toLowerCase() !== creator.toLowerCase()) {
+    return new Response(
+      JSON.stringify({ error: "signer is not feed creator" }),
+      { status: 403, headers: cors },
+    );
+  }
+
+  // Make sure the submitted text actually hashes to the value stored on
+  // chain. Otherwise KV could drift from chain truth.
+  const expectedHash = keccak256(toHex(methodology));
+  if (expectedHash.toLowerCase() !== onchainHash.toLowerCase()) {
+    return new Response(
+      JSON.stringify({
+        error: "methodology text does not match onchain hash",
+        expected: onchainHash,
+        got: expectedHash,
+      }),
+      { status: 400, headers: cors },
+    );
+  }
+
+  await env.MARKET_DESCRIPTIONS.put(
+    `methodology:${feedId.toLowerCase()}`,
+    JSON.stringify({
+      methodology,
+      creator,
+      updatedAt: Math.floor(Date.now() / 1000),
+    }),
   );
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers: cors });
 }
