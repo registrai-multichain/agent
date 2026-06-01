@@ -7,7 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 # cron expression to its agent.
 [triggers]
 crons = [
-  "0 14 * * *",   # warsaw-resi attestation, daily 14:00 UTC
+  "0 14 * * *",   # warsaw + cpi + ecb + warsaw-verifiable attestations, daily 14:00 UTC
   "0 */6 * * *",  # market proposer (LLM), every 6 hours
   "*/15 * * * *", # market-maker bot, every 15 minutes
   "*/30 * * * *", # v0.5 CirqueLending: bonded BTC/USD oracle agent + cirBTC integrity monitor
@@ -31,6 +31,13 @@ id = "66eed5c1acf042c3820c443d712dc56e"
 # Secrets (PRIVATE_KEY, RPC_URL, NBP_REPORT_URL) are set via:
 #   wrangler secret put PRIVATE_KEY
 [vars]
+# Borrow-against-bet stack (deployed 2026-06-01). The force-close keeper runs
+# on the */30 cron and reuses KEEPER_PRIVATE_KEY unless BET_KEEPER_PRIVATE_KEY
+# is set as a secret.
+BET_LENDING_ADDR = "0x8168bdD7990abc42b92b59DE6d411e9C66bB93C1"
+MARKETS_V3_ADDR = "0xDDC085320D5A739cB5726f01E9c4b5d058fFfB00"
+USDC_ADDR = "0x3600000000000000000000000000000000000000"
+BET_LENDING_DEPLOY_BLOCK = "44990000"
 REGISTRY_ADDRESS = "0xA8E6f5aC6410231Db1422f3B17987Cf657807224"
 ATTESTATION_ADDRESS = "0x04227E2e53041165CB38D5C0aFadCC95096ae5f4"
 MARKETS_ADDR = "0xcaB9aB405F89AC701c3CAcCF110bF94f3A10cD86"

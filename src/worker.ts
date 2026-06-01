@@ -157,15 +157,13 @@ export default {
       // CirqueBetLending force-close keeper: write off resolved-loser loans
       // (free) and force-close profitable positions near expiry. Skipped until
       // the contract is deployed and these are configured.
-      if (
-        env.BET_LENDING_ADDR &&
-        env.BET_KEEPER_PRIVATE_KEY &&
-        env.MARKETS_V3_ADDR &&
-        env.USDC_ADDR
-      ) {
+      // Reuse the BTC keeper wallet if a dedicated bet-keeper key isn't set —
+      // both just need a funded wallet to pay `owed` on profitable closes.
+      const betKeeperKey = env.BET_KEEPER_PRIVATE_KEY ?? env.KEEPER_PRIVATE_KEY;
+      if (env.BET_LENDING_ADDR && betKeeperKey && env.MARKETS_V3_ADDR && env.USDC_ADDR) {
         await runBetKeeper({
           RPC_URL: env.RPC_URL,
-          BET_KEEPER_PRIVATE_KEY: env.BET_KEEPER_PRIVATE_KEY,
+          BET_KEEPER_PRIVATE_KEY: betKeeperKey,
           BET_LENDING_ADDR: env.BET_LENDING_ADDR,
           MARKETS_V3_ADDR: env.MARKETS_V3_ADDR,
           USDC_ADDR: env.USDC_ADDR,
