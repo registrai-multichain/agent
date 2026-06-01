@@ -27,6 +27,7 @@ import { generateProposals, type ProposalSet } from "./agents/proposer.js";
 import { runMarketMaker } from "./bots/mm.js";
 import { handleQuestRequest } from "./social-oracle.js";
 import { runCirqueKeeper } from "./cirque-keeper.js";
+import { runBetKeeper } from "./bet-keeper.js";
 import { attestationAbi, log } from "@registrai/agent-sdk";
 
 export interface Env {
@@ -66,6 +67,14 @@ export interface Env {
   BTC_FEED_ID?: string;
   CIRBTC_ADDR?: string;
   CIRBTC_EXPECTED_OWNER?: string;
+
+  // CirqueBetLending — force-close keeper (write-off + profitable liquidation).
+  // Optional; cron skips it until the contract is deployed and configured.
+  BET_LENDING_ADDR?: string;
+  BET_KEEPER_PRIVATE_KEY?: string;
+  MARKETS_V3_ADDR?: string;
+  USDC_ADDR?: string;
+  BET_LENDING_DEPLOY_BLOCK?: string;
 
   // Public config — Polish CPI
   POLISH_CPI_FEED_ID?: string;
@@ -142,6 +151,25 @@ export default {
           BTC_FEED_ID: env.BTC_FEED_ID,
           CIRBTC_ADDR: env.CIRBTC_ADDR,
           CIRBTC_EXPECTED_OWNER: env.CIRBTC_EXPECTED_OWNER,
+        });
+      }
+
+      // CirqueBetLending force-close keeper: write off resolved-loser loans
+      // (free) and force-close profitable positions near expiry. Skipped until
+      // the contract is deployed and these are configured.
+      if (
+        env.BET_LENDING_ADDR &&
+        env.BET_KEEPER_PRIVATE_KEY &&
+        env.MARKETS_V3_ADDR &&
+        env.USDC_ADDR
+      ) {
+        await runBetKeeper({
+          RPC_URL: env.RPC_URL,
+          BET_KEEPER_PRIVATE_KEY: env.BET_KEEPER_PRIVATE_KEY,
+          BET_LENDING_ADDR: env.BET_LENDING_ADDR,
+          MARKETS_V3_ADDR: env.MARKETS_V3_ADDR,
+          USDC_ADDR: env.USDC_ADDR,
+          BET_LENDING_DEPLOY_BLOCK: env.BET_LENDING_DEPLOY_BLOCK,
         });
       }
     } else {
