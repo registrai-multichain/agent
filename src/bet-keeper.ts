@@ -88,7 +88,7 @@ const lendingAbi = parseAbi([
 ]);
 
 const marketsAbi = parseAbi([
-  "function getMarket(bytes32) view returns (tuple(bytes32 feedId, address agent, int256 threshold, uint8 comparator, uint256 expiry, address creator, uint256 yesReserve, uint256 noReserve, uint8 phase, bool yesWon, uint256 createdAt))",
+  "function getMarket(bytes32) view returns ((bytes32 feedId, address agent, int256 threshold, uint8 comparator, uint256 expiry, address creator, uint256 yesReserve, uint256 noReserve, uint8 phase, bool yesWon, uint256 createdAt))",
 ]);
 
 const erc20Abi = parseAbi([
