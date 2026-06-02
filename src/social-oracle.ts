@@ -79,12 +79,16 @@ export interface SocialEnv {
   REGISTRY_V2?: string;            // v2 (where new agents register)
   /** KV namespace for quest claims + handle bindings. */
   SOCIAL_CLAIMS: KVNamespace;
+  /** CirqueBetLending — for the "use the borrow pool" quest (verify the wallet
+   *  has an active loan or has supplied USDC). */
+  BET_LENDING_ADDR?: string;
 }
 
 // ────────────────────────── Constants / ABIs ───────────────────────
 
 const POINTS_QUEST_CONNECT_TWITTER = 50;
 const POINTS_QUEST_SHARE_AGENT = 150;
+const POINTS_QUEST_BET_USE = 100;
 const NONCE_TTL_SECONDS = 60 * 60; // pending challenge expires after 1 hour
 
 // AgentRegistered(bytes32 indexed feedId, address indexed agent, ...)
@@ -109,6 +113,28 @@ const awardFlatAbi = [
       { name: "reason", type: "bytes32" },
     ],
     outputs: [],
+  },
+] as const;
+
+// Reads used to verify the "use the borrow pool" quest on chain.
+const betLendingReadAbi = [
+  {
+    type: "function", name: "loans", stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }],
+    outputs: [
+      { name: "marketId", type: "bytes32" },
+      { name: "betYes", type: "bool" },
+      { name: "shares", type: "uint256" },
+      { name: "principal", type: "uint256" },
+      { name: "borrowedAt", type: "uint256" },
+      { name: "active", type: "bool" },
+      { name: "markValueAtBorrow", type: "uint256" },
+    ],
+  },
+  {
+    type: "function", name: "shares", stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }],
+    outputs: [{ type: "uint256" }],
   },
 ] as const;
 
@@ -139,6 +165,9 @@ export async function handleQuestRequest(
     request.method === "POST"
   ) {
     return handleShareAgentVerify(request, env, cors);
+  }
+  if (url.pathname === "/quest/bet/claim" && request.method === "POST") {
+    return handleBetUseClaim(request, env, cors);
   }
   if (url.pathname === "/quest/status" && request.method === "GET") {
     return handleStatus(url, env, cors);
@@ -386,9 +415,10 @@ async function handleStatus(
   if (!wallet || !isAddress(wallet)) {
     return json({ error: "wallet query param required" }, 400, cors);
   }
-  const [twitter, shareAgent] = await Promise.all([
+  const [twitter, shareAgent, betUse] = await Promise.all([
     env.SOCIAL_CLAIMS.get(`twitter_connect:${wallet}`),
     env.SOCIAL_CLAIMS.get(`share_agent:${wallet}`),
+    env.SOCIAL_CLAIMS.get(`bet_use:${wallet}`),
   ]);
   return json(
     {
@@ -396,11 +426,107 @@ async function handleStatus(
       quests: {
         twitter_connect: twitter ? JSON.parse(twitter) : null,
         share_agent: shareAgent ? JSON.parse(shareAgent) : null,
+        bet_use: betUse ? JSON.parse(betUse) : null,
       },
     },
     200,
     cors,
   );
+}
+
+// ───────── Quest: use the borrow pool (CirqueBetLending) ─────────
+// Proof is purely on-chain — the wallet must currently have an active loan
+// OR have supplied USDC to the pool. No tweet/nonce: the action is the proof.
+// Sybil-limited the same way as the other quests: requires twitter_connect
+// (one handle ↔ one wallet) and is one-shot per wallet.
+
+interface BetUseClaimBody { wallet?: string }
+
+async function handleBetUseClaim(
+  req: Request,
+  env: SocialEnv,
+  cors: Record<string, string>,
+): Promise<Response> {
+  if (!env.MINTER_PRIVATE_KEY && !env.SOCIAL_PRIVATE_KEY) {
+    return json({ error: "minter not configured" }, 500, cors);
+  }
+  if (!env.REGISTRAI_POINTS_ADDR) {
+    return json({ error: "points contract not configured" }, 500, cors);
+  }
+  if (!env.BET_LENDING_ADDR) {
+    return json({ error: "bet-lending not configured" }, 500, cors);
+  }
+
+  let body: BetUseClaimBody;
+  try {
+    body = (await req.json()) as BetUseClaimBody;
+  } catch {
+    return json({ error: "invalid json" }, 400, cors);
+  }
+  const wallet = body.wallet?.toLowerCase();
+  if (!wallet || !isAddress(wallet)) {
+    return json({ error: "wallet required" }, 400, cors);
+  }
+
+  if (!(await checkRateLimit(env, wallet))) {
+    return json({ error: "too many attempts — wait a few minutes" }, 429, cors);
+  }
+
+  // Idempotency.
+  const already = await env.SOCIAL_CLAIMS.get(`bet_use:${wallet}`);
+  if (already) {
+    return json({ error: "already claimed", claim: JSON.parse(already) }, 409, cors);
+  }
+
+  // Sybil anchor: must have completed Connect Twitter (binds handle↔wallet).
+  const twitterClaimRaw = await env.SOCIAL_CLAIMS.get(`twitter_connect:${wallet}`);
+  if (!twitterClaimRaw) {
+    return json({ error: "complete the Connect Twitter quest first" }, 400, cors);
+  }
+  const { handle } = JSON.parse(twitterClaimRaw) as { handle: string };
+
+  // Verify the on-chain action: active loan OR pool shares > 0. A flaky RPC
+  // must surface as 503 (retryable), never a false denial.
+  let qualifies = false;
+  try {
+    const client = createPublicClient({ chain: arc, transport: http(env.RPC_URL) });
+    const lending = env.BET_LENDING_ADDR as Address;
+    const [loan, poolShares] = await Promise.all([
+      client.readContract({ address: lending, abi: betLendingReadAbi, functionName: "loans", args: [wallet as Address] }) as Promise<readonly unknown[]>,
+      client.readContract({ address: lending, abi: betLendingReadAbi, functionName: "shares", args: [wallet as Address] }) as Promise<bigint>,
+    ]);
+    const hasActiveLoan = Boolean(loan[5]); // active flag (7-tuple index 5)
+    qualifies = hasActiveLoan || poolShares > 0n;
+  } catch (e) {
+    log.error("social-oracle: bet_use on-chain check failed", { error: (e as Error).message });
+    return json({ error: "could not verify on chain right now — please retry in a minute" }, 503, cors);
+  }
+  if (!qualifies) {
+    return json(
+      { error: "no activity found — borrow against a position or supply USDC at registrai.cc/borrow first" },
+      400,
+      cors,
+    );
+  }
+
+  // Claiming sentinel — guards against concurrent double-mint.
+  const sentinelKey = `claiming_bet:${wallet}`;
+  if (await env.SOCIAL_CLAIMS.get(sentinelKey)) {
+    return json({ error: "claim already in progress, please wait" }, 429, cors);
+  }
+  await env.SOCIAL_CLAIMS.put(sentinelKey, "1", { expirationTtl: 60 });
+
+  let txHash: Hex;
+  try {
+    txHash = await mintCredit(env, wallet as Address, POINTS_QUEST_BET_USE, "quest_bet_use");
+  } catch (e) {
+    log.error("social-oracle: bet_use mint failed", { error: (e as Error).message });
+    return json({ error: "failed to mint onchain — please retry" }, 502, cors);
+  }
+
+  const claim = { handle, points: POINTS_QUEST_BET_USE, txHash };
+  await env.SOCIAL_CLAIMS.put(`bet_use:${wallet}`, JSON.stringify(claim));
+  return json({ ok: true, points: POINTS_QUEST_BET_USE, txHash }, 200, cors);
 }
 
 // ──────────────── Quest: tweet about your agent ────────────────────
