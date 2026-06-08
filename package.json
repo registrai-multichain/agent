@@ -14,6 +14,7 @@
     "once": "tsx src/index.ts --once",
     "bot:trade": "tsx src/bots/trader.ts",
     "bot:mm": "tsx src/bots/mm.ts",
+    "falsify:ai-index": "tsx src/scripts/ai-index-falsify.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
